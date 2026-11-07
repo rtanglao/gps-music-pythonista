@@ -22,6 +22,7 @@ This document preserves the key architectural decisions, conventions, and implem
 ### Audio Playback & Pythonista Lifecycle
 - **Native Audio Player:** Uses Apple's native `AVAudioPlayer` from `AVFoundation` via Pythonista 3's `objc_util` bridge, with graceful fallback to `sound.Player` and `DesktopAudioPlayer` (`afplay`).
 - **Audio Session Configuration:** Automatically configures `AVAudioSession` with `AVAudioSessionCategoryPlayback` to ensure audio plays when physical silent switch is engaged and during background execution.
+- **Hardware Verification:** Tested and verified on physical iPhone hardware; audio correctly routes and plays through the built-in speaker.
 - **GC Retention Buffer:** Active player instances are retained in a bounded `collections.deque(maxlen=8)` to prevent Python's garbage collector from destroying player instances prematurely and cutting off audio.
 - **Clean Termination:** When the script exits or is interrupted (`KeyboardInterrupt`), all active players are stopped.
 - **Desktop Fallback:** Uses macOS `afplay` via non-blocking subprocesses when iOS audio frameworks are unavailable.
@@ -49,3 +50,4 @@ This document preserves the key architectural decisions, conventions, and implem
   - **Resolution:** Implemented and pushed to `main` in commit `f8818ba`. Issue #1 closed.
 - **Issue #2:** "Use AVAudioPlayer framework (via objc_util) for audio playback in gps_music.py".
   - **Resolution:** Implemented `AVAudioPlayerAudioPlayer` using `objc_util` (`AVAudioPlayer` & `AVAudioSession`), configured `AVAudioSessionCategoryPlayback`, preserved fallback hierarchy (`AVAudioPlayer` > `sound.Player` > desktop), added unit tests, and updated documentation. Issue #2 resolved.
+  - **Verification:** Verified on iPhone running Pythonista 3 with audio playing correctly through the built-in speaker.
