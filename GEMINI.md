@@ -51,3 +51,20 @@ This document preserves the key architectural decisions, conventions, and implem
 - **Issue #2:** "Use AVAudioPlayer framework (via objc_util) for audio playback in gps_music.py".
   - **Resolution:** Implemented `AVAudioPlayerAudioPlayer` using `objc_util` (`AVAudioPlayer` & `AVAudioSession`), configured `AVAudioSessionCategoryPlayback`, preserved fallback hierarchy (`AVAudioPlayer` > `sound.Player` > desktop), added unit tests, and updated documentation. Issue #2 resolved.
   - **Verification:** Verified on iPhone running Pythonista 3 with audio playing correctly through the built-in speaker.
+
+---
+
+## 5. Key Technical Learnings & Best Practices
+
+### iOS Hardware Silent Switch vs. AVAudioSession
+- **Problem:** Pythonista 3's high-level `sound.Player` obeys the iPhone's physical silent/mute switch by default. When the mute switch is engaged, audio is muted through the built-in speaker.
+- **Solution & Invariant:** Always configure Apple's native `AVAudioSession` with category `AVAudioSessionCategoryPlayback` via `objc_util` (`session.setCategory_error_('AVAudioSessionCategoryPlayback', None)` and `session.setActive_error_(True, None)`). This ensures audio plays through the built-in speaker regardless of the physical mute switch position and supports background audio execution.
+
+### Garbage Collection & ARC Object Retention
+- **Problem:** Both Pythonista's `sound.Player` and Objective-C `AVAudioPlayer` objects instantiated in a loop will be deallocated by Python's GC or Objective-C ARC when their local scope ends, cutting off audio playback mid-sound.
+- **Solution & Invariant:** Retain active player instances in a rolling bounded FIFO buffer (`collections.deque(maxlen=8)`). This maintains references long enough for playback to complete while bounding memory consumption indefinitely.
+
+### Mobile GPS Lifecycle & Hardware Power Management
+- **Problem:** `location.start_updates()` powers on high-drain GPS hardware on iOS. If an uncaught exception or early exit occurs without stopping updates, the battery drains rapidly in the background.
+- **Solution & Invariant:** Always wrap the update loop in a `try...finally` block that guarantees calling `location.stop_updates()` and `audio_player.stop_all()`.
+- **Satellite Fix Acquisition:** GPS hardware requires several seconds to acquire initial satellite lock, during which `location.get_location()` returns `None`. Location loops must gracefully handle `None` by falling back to a default pool rather than crashing.
