@@ -35,6 +35,18 @@ AUDIO_EXTENSIONS = (".aif", ".aiff", ".AIF", ".AIFF")
 # ==============================================================================
 # Platform Detection & Native Modules
 # ==============================================================================
+# Pythonista 3's Objective-C bridge for AVFoundation (AVAudioPlayer & AVAudioSession)
+try:
+    from objc_util import ObjCClass, nsurl
+    AVAudioPlayer = ObjCClass("AVAudioPlayer")
+    AVAudioSession = ObjCClass("AVAudioSession")
+    HAS_OBJC_AV_AUDIO = True
+except Exception:
+    AVAudioPlayer = None
+    AVAudioSession = None
+    nsurl = None
+    HAS_OBJC_AV_AUDIO = False
+
 try:
     import location  # Pythonista 3 built-in module
     HAS_PYTHONISTA_LOCATION = True
@@ -48,6 +60,24 @@ try:
 except ImportError:
     sound = None
     HAS_PYTHONISTA_SOUND = False
+
+
+def setup_audio_session() -> bool:
+    """
+    Configure the iOS AVAudioSession for background / playback audio so that
+    playback continues even if the device's physical mute/silent switch is on.
+    """
+    if not HAS_OBJC_AV_AUDIO or AVAudioSession is None:
+        return False
+    try:
+        session = AVAudioSession.sharedInstance()
+        # AVAudioSessionCategoryPlayback ensures audio plays even if silent switch is on
+        session.setCategory_error_("AVAudioSessionCategoryPlayback", None)
+        session.setActive_error_(True, None)
+        return True
+    except Exception as e:
+        print(f"[AVAudioSession Warning] Could not configure audio session: {e}", file=sys.stderr)
+        return False
 
 
 def find_audio_files(directory: str | Path, extensions: Sequence[str] = AUDIO_EXTENSIONS) -> List[Path]:
@@ -201,6 +231,54 @@ class BaseAudioPlayer:
         pass
 
 
+class AVAudioPlayerAudioPlayer(BaseAudioPlayer):
+    """
+    Native iOS audio playback using Apple's AVFoundation AVAudioPlayer framework
+    via Pythonista 3's objc_util bridge.
+    """
+
+    def __init__(self, max_concurrent: int = 8, configure_session: bool = True) -> None:
+        self.max_concurrent = max_concurrent
+        # Retain references to active AVAudioPlayer instances so Pythonista's GC/ARC does not cut playback short
+        self._players: collections.deque = collections.deque(maxlen=max_concurrent)
+        if configure_session:
+            setup_audio_session()
+
+    def play(self, file_path: Path, volume: float = 1.0) -> None:
+        if not HAS_OBJC_AV_AUDIO or AVAudioPlayer is None:
+            return
+
+        try:
+            abs_path = str(file_path.resolve())
+            if nsurl is not None:
+                url = nsurl(abs_path)
+            else:
+                NSURL = ObjCClass("NSURL")
+                url = NSURL.fileURLWithPath_(abs_path)
+
+            player = AVAudioPlayer.alloc().initWithContentsOfURL_error_(url, None)
+            if player is None:
+                print(f"[AVAudioPlayer Error] Could not initialize player for {file_path.name}", file=sys.stderr)
+                return
+
+            player.setVolume_(max(0.0, min(1.0, float(volume))))
+            player.prepareToPlay()
+            started = player.play()
+            if not started:
+                print(f"[AVAudioPlayer Warning] Playback did not start for {file_path.name}", file=sys.stderr)
+            self._players.append(player)
+        except Exception as e:
+            print(f"[AVAudioPlayer Error] Failed to play {file_path.name}: {e}", file=sys.stderr)
+
+    def stop_all(self) -> None:
+        while self._players:
+            player = self._players.popleft()
+            try:
+                player.stop()
+            except Exception:
+                pass
+
+
 class PythonistaAudioPlayer(BaseAudioPlayer):
     """Audio playback using Pythonista 3's built-in sound module."""
 
@@ -278,6 +356,7 @@ class GPSMusicApp:
         volume: float = DEFAULT_VOLUME,
         location_provider: Optional[BaseLocationProvider] = None,
         audio_player: Optional[BaseAudioPlayer] = None,
+        audio_backend: str = "auto",
     ) -> None:
         self.audio_dir = Path(audio_dir)
         self.interval = float(interval)
@@ -301,10 +380,30 @@ class GPSMusicApp:
 
         if audio_player is not None:
             self.audio_player = audio_player
-        elif HAS_PYTHONISTA_SOUND:
-            self.audio_player = PythonistaAudioPlayer()
-        else:
+        elif audio_backend == "avplayer":
+            if HAS_OBJC_AV_AUDIO:
+                self.audio_player = AVAudioPlayerAudioPlayer()
+            else:
+                print("[Warning] AVAudioPlayer backend requested but not available; checking fallbacks.")
+                if HAS_PYTHONISTA_SOUND:
+                    self.audio_player = PythonistaAudioPlayer()
+                else:
+                    self.audio_player = DesktopAudioPlayer()
+        elif audio_backend == "sound":
+            if HAS_PYTHONISTA_SOUND:
+                self.audio_player = PythonistaAudioPlayer()
+            else:
+                print("[Warning] Pythonista 'sound' backend requested but not available; using desktop player.")
+                self.audio_player = DesktopAudioPlayer()
+        elif audio_backend == "desktop":
             self.audio_player = DesktopAudioPlayer()
+        else:  # "auto"
+            if HAS_OBJC_AV_AUDIO:
+                self.audio_player = AVAudioPlayerAudioPlayer()
+            elif HAS_PYTHONISTA_SOUND:
+                self.audio_player = PythonistaAudioPlayer()
+            else:
+                self.audio_player = DesktopAudioPlayer()
 
         self._current_cell: Optional[Tuple[int, int]] = None
         self._current_palette: List[Path] = []
@@ -439,6 +538,12 @@ def parse_args(argv: Optional[Sequence[str]] = None) -> argparse.Namespace:
         help="Force simulated GPS movement even if native location is available",
     )
     parser.add_argument(
+        "--player",
+        choices=["auto", "avplayer", "sound", "desktop"],
+        default="auto",
+        help="Audio player backend: 'auto' (AVAudioPlayer > sound > desktop), 'avplayer', 'sound', or 'desktop' (default: auto)",
+    )
+    parser.add_argument(
         "--max-ticks",
         type=int,
         default=None,
@@ -458,6 +563,7 @@ def main() -> None:
         palette_size=args.palette_size,
         volume=args.volume,
         location_provider=loc_provider,
+        audio_backend=args.player,
     )
     app.run(max_ticks=args.max_ticks)
 

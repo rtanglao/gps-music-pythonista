@@ -7,16 +7,22 @@ import shutil
 import tempfile
 import unittest
 from pathlib import Path
-from unittest.mock import MagicMock
+from unittest.mock import MagicMock, patch
 
+import gps_music
 from gps_music import (
+    AVAudioPlayerAudioPlayer,
     BaseAudioPlayer,
     BaseLocationProvider,
+    DesktopAudioPlayer,
     GPSMusicApp,
+    PythonistaAudioPlayer,
     SimulatedLocationProvider,
     coord_to_grid,
     find_audio_files,
     get_cell_palette,
+    parse_args,
+    setup_audio_session,
 )
 
 
@@ -197,6 +203,124 @@ class TestGPSMusicApp(unittest.TestCase):
         self.assertTrue(loc_provider.stopped)
         self.assertTrue(audio_player.stopped)
         self.assertEqual(len(audio_player.played), 3)
+
+    def test_audio_backend_selection_desktop(self):
+        app = GPSMusicApp(
+            audio_dir=self.audio_dir,
+            audio_backend="desktop",
+        )
+        self.assertIsInstance(app.audio_player, DesktopAudioPlayer)
+
+    def test_audio_backend_selection_avplayer(self):
+        with patch.object(gps_music, "HAS_OBJC_AV_AUDIO", True), \
+             patch.object(gps_music, "AVAudioSession", MagicMock()):
+            app = GPSMusicApp(
+                audio_dir=self.audio_dir,
+                audio_backend="avplayer",
+            )
+            self.assertIsInstance(app.audio_player, AVAudioPlayerAudioPlayer)
+
+    def test_audio_backend_selection_sound(self):
+        with patch.object(gps_music, "HAS_PYTHONISTA_SOUND", True):
+            app = GPSMusicApp(
+                audio_dir=self.audio_dir,
+                audio_backend="sound",
+            )
+            self.assertIsInstance(app.audio_player, PythonistaAudioPlayer)
+
+
+class TestAVAudioPlayerAudioPlayer(unittest.TestCase):
+    def setUp(self):
+        self.mock_session_class = MagicMock()
+        self.mock_session = MagicMock()
+        self.mock_session_class.sharedInstance.return_value = self.mock_session
+
+        self.mock_player_class = MagicMock()
+        self.mock_player_alloc = MagicMock()
+        self.mock_player_instance = MagicMock()
+        self.mock_player_class.alloc.return_value = self.mock_player_alloc
+        self.mock_player_alloc.initWithContentsOfURL_error_.return_value = self.mock_player_instance
+        self.mock_player_instance.play.return_value = True
+
+        self.mock_nsurl = MagicMock(side_effect=lambda path: f"file://{path}")
+
+    def test_setup_audio_session_success(self):
+        with patch.object(gps_music, "HAS_OBJC_AV_AUDIO", True), \
+             patch.object(gps_music, "AVAudioSession", self.mock_session_class):
+            success = setup_audio_session()
+            self.assertTrue(success)
+            self.mock_session.setCategory_error_.assert_called_once_with(
+                "AVAudioSessionCategoryPlayback", None
+            )
+            self.mock_session.setActive_error_.assert_called_once_with(True, None)
+
+    def test_setup_audio_session_failure_returns_false(self):
+        with patch.object(gps_music, "HAS_OBJC_AV_AUDIO", True), \
+             patch.object(gps_music, "AVAudioSession", self.mock_session_class):
+            self.mock_session.setCategory_error_.side_effect = RuntimeError("Session error")
+            success = setup_audio_session()
+            self.assertFalse(success)
+
+    def test_setup_audio_session_not_available(self):
+        with patch.object(gps_music, "HAS_OBJC_AV_AUDIO", False):
+            success = setup_audio_session()
+            self.assertFalse(success)
+
+    def test_play_and_retention(self):
+        with patch.object(gps_music, "HAS_OBJC_AV_AUDIO", True), \
+             patch.object(gps_music, "AVAudioPlayer", self.mock_player_class), \
+             patch.object(gps_music, "AVAudioSession", self.mock_session_class), \
+             patch.object(gps_music, "nsurl", self.mock_nsurl):
+            player = AVAudioPlayerAudioPlayer(max_concurrent=2, configure_session=True)
+            self.mock_session.setCategory_error_.assert_called_once()
+
+            file1 = Path("sample_1.aif")
+            player.play(file1, volume=0.75)
+
+            self.mock_nsurl.assert_called_once_with(str(file1.resolve()))
+            self.mock_player_instance.setVolume_.assert_called_once_with(0.75)
+            self.mock_player_instance.prepareToPlay.assert_called_once()
+            self.mock_player_instance.play.assert_called_once()
+            self.assertEqual(len(player._players), 1)
+
+            # Play two more files to verify bounded deque behavior
+            file2 = Path("sample_2.aif")
+            file3 = Path("sample_3.aif")
+            player.play(file2)
+            player.play(file3)
+            # max_concurrent is 2, so queue length should stay 2
+            self.assertEqual(len(player._players), 2)
+
+    def test_stop_all(self):
+        with patch.object(gps_music, "HAS_OBJC_AV_AUDIO", True), \
+             patch.object(gps_music, "AVAudioPlayer", self.mock_player_class), \
+             patch.object(gps_music, "AVAudioSession", self.mock_session_class), \
+             patch.object(gps_music, "nsurl", self.mock_nsurl):
+            player = AVAudioPlayerAudioPlayer(max_concurrent=4, configure_session=False)
+            instance1 = MagicMock()
+            instance2 = MagicMock()
+            player._players.append(instance1)
+            player._players.append(instance2)
+
+            player.stop_all()
+            instance1.stop.assert_called_once()
+            instance2.stop.assert_called_once()
+            self.assertEqual(len(player._players), 0)
+
+
+class TestCommandLineArgs(unittest.TestCase):
+    def test_parse_player_argument(self):
+        args = parse_args(["--player", "avplayer"])
+        self.assertEqual(args.player, "avplayer")
+
+        args = parse_args(["--player", "sound"])
+        self.assertEqual(args.player, "sound")
+
+        args = parse_args(["--player", "desktop"])
+        self.assertEqual(args.player, "desktop")
+
+        args = parse_args([])
+        self.assertEqual(args.player, "auto")
 
 
 if __name__ == "__main__":

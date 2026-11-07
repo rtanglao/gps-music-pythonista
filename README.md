@@ -10,7 +10,8 @@ A Python script for **Pythonista 3** on iOS that reads the device's GPS coordina
 - **2-Second Generative Interval:** Every 2 seconds, the script selects and plays an audio file randomly from the current location's active palette.
 - **Pythonista 3 Native Integration:**
   - Uses Pythonista's native `location` module for GPS updates (`location.start_updates()`, `location.get_location()`).
-  - Uses Pythonista's native `sound` module (`sound.Player`) for seamless playback without cutting off audio.
+  - Uses Apple's native `AVAudioPlayer` framework via `objc_util` (with fallback to `sound.Player`) for reliable, overlapping playback.
+  - Automatically configures `AVAudioSession` (`AVAudioSessionCategoryPlayback`) so audio plays even when the device silent switch is enabled or when backgrounded.
   - Automatically shuts down GPS hardware on exit (`location.stop_updates()`) to preserve battery life.
 - **Cross-Platform / Simulator Support:** Can also run on macOS or Linux for testing, with built-in GPS drift simulation and `afplay` playback.
 - **Included Sample Audio:** Includes 5 synthesized tone `.aif` files in `sample_audio/` so you can test immediately.
@@ -81,6 +82,7 @@ Options:
 - `--grid-size`, `-g`: Grid cell size in meters (default: 50.0).
 - `--palette-size`, `-p`: Active sound palette size per cell (default: 4).
 - `--volume`, `-v`: Volume between 0.0 and 1.0 (default: 1.0).
+- `--player`: Audio backend: `auto` (prefers `AVAudioPlayer` > `sound` > `desktop`), `avplayer`, `sound`, or `desktop` (default: `auto`).
 - `--simulate-gps`: Force simulated GPS drift (useful off-device).
 - `--max-ticks`: Automatically exit after N playback cycles.
 

@@ -20,10 +20,11 @@ This document preserves the key architectural decisions, conventions, and implem
 - **Rationale:** Ensures spatial coherence (walking through a physical space feels like moving through distinct ambient sound zones) while retaining generative variety on each 2-second tick.
 
 ### Audio Playback & Pythonista Lifecycle
-- **Native Audio Player:** Uses `sound.Player` from Pythonista's standard library on iOS.
+- **Native Audio Player:** Uses Apple's native `AVAudioPlayer` from `AVFoundation` via Pythonista 3's `objc_util` bridge, with graceful fallback to `sound.Player` and `DesktopAudioPlayer` (`afplay`).
+- **Audio Session Configuration:** Automatically configures `AVAudioSession` with `AVAudioSessionCategoryPlayback` to ensure audio plays when physical silent switch is engaged and during background execution.
 - **GC Retention Buffer:** Active player instances are retained in a bounded `collections.deque(maxlen=8)` to prevent Python's garbage collector from destroying player instances prematurely and cutting off audio.
 - **Clean Termination:** When the script exits or is interrupted (`KeyboardInterrupt`), all active players are stopped.
-- **Desktop Fallback:** Uses macOS `afplay` via non-blocking subprocesses when `sound` is unavailable.
+- **Desktop Fallback:** Uses macOS `afplay` via non-blocking subprocesses when iOS audio frameworks are unavailable.
 
 ### GPS Tracking & Hardware Management
 - **Lifecycle Cleanliness:** Uses `location.start_updates()` on startup and guarantees `location.stop_updates()` in a `try...finally` block. This prevents keeping the iOS GPS hardware active after exit and draining battery.
@@ -45,4 +46,6 @@ This document preserves the key architectural decisions, conventions, and implem
 
 ## 4. History & GitHub Tracking
 - **Issue #1:** "Write Pythonista 3 script to randomly play an AIF file every 2 seconds based on GPS coordinates".
-- **Resolution:** Implemented and pushed to `main` in commit `f8818ba`. Issue #1 closed.
+  - **Resolution:** Implemented and pushed to `main` in commit `f8818ba`. Issue #1 closed.
+- **Issue #2:** "Use AVAudioPlayer framework (via objc_util) for audio playback in gps_music.py".
+  - **Resolution:** Implemented `AVAudioPlayerAudioPlayer` using `objc_util` (`AVAudioPlayer` & `AVAudioSession`), configured `AVAudioSessionCategoryPlayback`, preserved fallback hierarchy (`AVAudioPlayer` > `sound.Player` > desktop), added unit tests, and updated documentation. Issue #2 resolved.
